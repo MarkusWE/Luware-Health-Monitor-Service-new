@@ -25,7 +25,11 @@ namespace Luware_Health_Monitor_Service
         List<Services> SfBList = new List<Services>();
         List<EventViewer> EvViewer = new List<EventViewer>();
         List<LogSystemEvents> evRecs = new List<LogSystemEvents>();
+        List<LogSystemEvents> oldevRecs = new List<LogSystemEvents>();
+        bool evRecsChecked = false;
+
         List<S2Start> oldstartList = new List<S2Start>();
+        List<S2Start> sChanged = new List<S2Start>();
         public List<S2Start> StartList = new List<S2Start>();
 
         public Language_Settings LSettings = new Language_Settings();
@@ -128,7 +132,7 @@ namespace Luware_Health_Monitor_Service
                 {
                     SfBList.Add(compl);
                     if (compl.ServiceHost != string.Empty)
-                        MWLogger.WriteLog("Service added to SfB (" + compl.ServiceName + " on Host: " + compl.ServiceHost + ")");
+                        MWLogger.WriteLog("Service added to SfB (" + compl.ServiceName + " on Host: " + compl.ServiceHost + " with status "+ compl.ServiceStatus.ToString() + ")");
                     else
                         MWLogger.WriteLog("Service added to SfB (" + compl.ServiceName + " on localhost)");
                 }
@@ -190,6 +194,7 @@ namespace Luware_Health_Monitor_Service
             }
 
         }
+
         private void Recheck_Value_Graph()
         {
             Service_Support sps = new Service_Support();
@@ -200,17 +205,19 @@ namespace Luware_Health_Monitor_Service
                 int compSum = SList.Count;
                 int realSum = 0;
 
+                // int serviceOk = 0;
                 foreach (Services s in SList)
                 {
                     // realSum = realSum + s.ServiceStatus;
                     if (s.ServiceStatus == 5)
                     {
-                        MWLogger.WriteLog("LUCS/TM-Service properly running: " + s.ServiceHost + " / " + s.ServiceName + " -  " + s.ServiceStatus);
-                        realSum++;
+                         //MWLogger.WriteLog("LUCS/TM-Service properly running: " + s.ServiceUPN + " / " + s.ServiceName + " -  " + s.ServiceStatus);
+                         realSum++;
                     }
+                    else
+                        MWLogger.WriteLog("LUCS/TM-Service not properly running: " + s.ServiceUPN + " / " + s.ServiceName + " -  " + s.ServiceStatus);
                 }
 
-                MWLogger.WriteLog("LUCS / TM Overall: " + realSum.ToString() + " from " + compSum.ToString() + " properly working");
             }
 
             int sqlError = 0;
@@ -220,15 +227,10 @@ namespace Luware_Health_Monitor_Service
                 MWLogger.WriteLog("Checking Connection String " + PSStrings[x].ServiceName);
 
                 PSStrings[x] = sqlS.Test_ConnectionString(PSStrings[x]);
-
                 if (PSStrings[x].Status != "Ok")
                 {
                     MWLogger.WriteLog("PSService: " + PSStrings[x].ServiceName + " not working");
                     sqlError++;
-                }
-                else
-                {
-                    MWLogger.WriteLog("PSService: " + PSStrings[x].ServiceName + " working");
                 }
             }
 
@@ -249,23 +251,153 @@ namespace Luware_Health_Monitor_Service
             }
 
             MWLogger.WriteLog("Scanning for Eventviewer Files");
-            EvViewer = sps.Get_EventViewer(ServerList);
+            EvViewer = EVENTV_Handler.Get_EventViewer(ServerList);
+            List<LogSystemEvents> evRecsChanged = new List<LogSystemEvents>();
 
-            if (EvViewer.Count > 0)
+            if ((EvViewer.Count > 0)&& (DashbConfig.EVENTV_Check))
             {
-                MWLogger.WriteLog("Eventviewer Logs found ... ");
-                evRecs = sps.Get_Events(EvViewer);
+                evRecs.Clear();
+                evRecs = EVENTV_Handler.Get_Events(EvViewer);
 
+                if (evRecsChecked)
+                {
+                    if (evRecs.Count > oldevRecs.Count)
+                    {
+                        foreach (LogSystemEvents ev in evRecs)
+                        {
+                            var oldEvts = oldevRecs.Where(s => (s.Id == ev.Id) && (s.Machine == ev.Machine) && (s.TimeCreated == ev.TimeCreated)).ToList();
+                            // MWLogger.WriteLog("Searched for  " + svc.ServerUPN + " / " + svc.ServiceName + ": " + svc.ServiceStatus.ToString() + " (" + oldSvc.Count.ToString() + ")");
+
+                            if (oldEvts.Count == 0)
+                            {
+
+                                if (DashbConfig.EVENTV_Exclude.Contains(ev.Id.ToString()))
+                                {
+                                    MWLogger.WriteLog("Event " + ev.Id.ToString() + " on " + ev.Machine + " detected, but excluded by exclusion list");
+                                }
+                                else
+                                {
+                                    LogSystemEvents lEvent = new LogSystemEvents();
+                                    lEvent = ev;
+                                    evRecsChanged.Add(lEvent);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             else
                 MWLogger.WriteLog("NO Eventlogs found... ");
 
+
+            if ((sChanged.Count > 0) || (evRecsChanged.Count > 0))
+            {
+                MWLogger.WriteLog("Mail will be sent: Services changes: " + sChanged.Count.ToString() + " Eventlogs changed: " + evRecsChanged.Count.ToString());
+                string service_text = Mail_Handler.Create_Service_Mail(DashbConfig, sChanged, evRecsChanged);
+
+                if (DashbConfig.MailEnabled)
+                {
+                    MWLogger.WriteLog("Mail settings enabled");
+
+                    string mailMessage = DashbConfig.MailBody;
+                    if (mailMessage.ToUpper().Contains("#SERVICETABLE#"))
+                    {
+                        mailMessage = mailMessage.Replace("#ServiceTable#", service_text);
+                    }
+                    else
+                        mailMessage += service_text;
+
+                    MWLogger.WriteLog("Error-Mailbody: " + Environment.NewLine + mailMessage);
+                    Mail_Handler.Send_Mail(DashbConfig, service_text);
+                }
+                else
+                    MWLogger.WriteLog("Mail settings not enabled");
+            }
+            else
+                MWLogger.WriteLog("No changed services/events flagged");
+
+            evRecsChecked = true;
+            oldevRecs = evRecs;
+            oldstartList = StartList;
+
         }
+        /*        private void Recheck_Value_Graph()
+                {
+                    Service_Support sps = new Service_Support();
+                    SQL_Support sqlS = new SQL_Support();
+
+                    if (SList.Count > 0)
+                    {
+                        int compSum = SList.Count;
+                        int realSum = 0;
+
+                        foreach (Services s in SList)
+                        {
+                            // realSum = realSum + s.ServiceStatus;
+                            if (s.ServiceStatus == 5)
+                            {
+                                MWLogger.WriteLog("LUCS/TM-Service properly running: " + s.ServiceHost + " / " + s.ServiceName + " -  " + s.ServiceStatus);
+                                realSum++;
+                            }
+                        }
+
+                        MWLogger.WriteLog("LUCS / TM Overall: " + realSum.ToString() + " from " + compSum.ToString() + " properly working");
+                    }
+
+                    int sqlError = 0;
+
+                    for (int x = 0; x < PSStrings.Count; x++)
+                    {
+                        MWLogger.WriteLog("Checking Connection String " + PSStrings[x].ServiceName);
+
+                        PSStrings[x] = sqlS.Test_ConnectionString(PSStrings[x]);
+
+                        if (PSStrings[x].Status != "Ok")
+                        {
+                            MWLogger.WriteLog("PSService: " + PSStrings[x].ServiceName + " not working");
+                            sqlError++;
+                        }
+                        else
+                        {
+                            MWLogger.WriteLog("PSService: " + PSStrings[x].ServiceName + " working");
+                        }
+                    }
+
+                    if (SfBList.Count > 0)
+                    {
+
+                        int compSum = SfBList.Count * 5;
+                        int realSum = 0;
+
+                        int serviceOk = 0;
+                        foreach (Services s in SfBList)
+                        {
+                            realSum = realSum + s.ServiceStatus;
+                            if (s.ServiceStatus == 5)
+                                serviceOk++;
+                        }
+
+                    }
+
+                    MWLogger.WriteLog("Scanning for Eventviewer Files");
+                    EvViewer = sps.Get_EventViewer(ServerList);
+
+                    if (EvViewer.Count > 0)
+                    {
+                        MWLogger.WriteLog("Eventviewer Logs found ... ");
+                        evRecs = sps.Get_Events(EvViewer);
+
+                    }
+                    else
+                        MWLogger.WriteLog("NO Eventlogs found... ");
+
+                }
+        */
 
         private List<Services> Retrieve_Luware_Services()
         {
             GetServices GServices = new GetServices();
-            List<S2Start> sChanged = new List<S2Start>();
+
 
             MWLogger.WriteLog("Start searching for Services... ");
 
@@ -281,6 +413,7 @@ namespace Luware_Health_Monitor_Service
             StartList = GServices.Get_Luware_Services(ServerList, tbResult);
 
             // MWLogger.WriteLog("Searching old list " + oldstartList.Count.ToString() + "(" + StartList.Count.ToString() + ")");
+            sChanged.Clear();
 
             foreach (S2Start svc in StartList)
             {
@@ -309,6 +442,7 @@ namespace Luware_Health_Monitor_Service
                     MWLogger.WriteLog("Service " + svc.ServerUPN + " / " + svc.ServiceName + " not found in old List");
             }
 
+            /*
             if (sChanged.Count > 0)
             {
                 string service_text = Mail_Handler.Create_Service_Mail(DashbConfig, sChanged);
@@ -333,8 +467,10 @@ namespace Luware_Health_Monitor_Service
             }
             else
                 MWLogger.WriteLog("No changed services flagged");
+                oldstartList = StartList;
+            */
 
-            oldstartList = StartList;
+
 
             MWLogger.WriteLog("Finished searching for Services " + StartList.Count.ToString());
 

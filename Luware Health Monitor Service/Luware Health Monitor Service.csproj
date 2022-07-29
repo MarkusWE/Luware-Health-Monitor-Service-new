@@ -73,8 +73,6 @@
       <DesignTime>True</DesignTime>
       <DependentUpon>AssemblyInfo.tt</DependentUpon>
     </Compile>
-    <Compile Include="Classes\EventViewer.cs" />
-    <Compile Include="Classes\LogSystemEvents.cs" />
     <Compile Include="Classes\PSServices.cs" />
     <Compile Include="Classes\Statics.cs" />
     <Compile Include="HealthMonitorService.cs">
