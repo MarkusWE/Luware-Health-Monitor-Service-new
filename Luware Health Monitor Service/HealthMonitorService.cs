@@ -270,8 +270,9 @@ namespace Luware_Health_Monitor_Service
 
                             if (oldEvts.Count == 0)
                             {
+                                string[] eventCodes = DashbConfig.EVENTV_Exclude.Split(';');
 
-                                if (DashbConfig.EVENTV_Exclude.Contains(ev.Id.ToString()))
+                                if (eventCodes.Contains(ev.Id.ToString()))
                                 {
                                     MWLogger.WriteLog("Event " + ev.Id.ToString() + " on " + ev.Machine + " detected, but excluded by exclusion list");
                                 }
